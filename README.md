@@ -964,3 +964,475 @@ Both buckets were deleted after the test. The configuration is therefore documen
 - [Using Versioning in S3 Buckets](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
 - [S3 Lifecycle Rule Elements](https://docs.aws.amazon.com/AmazonS3/latest/userguide/intro-lifecycle-rules.html)
 - [Amazon S3 Server Access Logging](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ServerLogs.html)
+
+
+# AWS Assignment 10 - RDS Database Setup and Management
+
+## Overview
+
+This assignment demonstrates how to provision and manage a MySQL database using **Amazon Relational Database Service (Amazon RDS)** and connect to it securely from an **Amazon EC2** instance. The practical covers network access control, database creation, SQL operations, automated backups, and database monitoring.
+
+The database was deployed in the AWS Asia Pacific (Mumbai) Region (`ap-south-1`) inside the Default VPC. It was configured as a private database and was accessed from an Ubuntu EC2 instance through the VPC network.
+
+## Objectives
+
+- Launch an EC2 instance to act as the database client.
+- Configure separate Security Groups for EC2 access and RDS MySQL access.
+- Create a private Amazon RDS for MySQL DB instance.
+- Configure automated backups and review backup status.
+- Connect to RDS from EC2 using the MySQL command-line client.
+- Create a database, relational tables, and sample records.
+- Execute SQL queries for retrieval, filtering, sorting, joining, updating, deleting, and aggregation.
+- Review RDS monitoring metrics in the AWS console.
+
+## AWS Services and Technologies Used
+
+- Amazon RDS for MySQL
+- Amazon EC2
+- Amazon VPC and default subnets
+- EC2 Security Groups
+- AWS-managed EC2 Instance Connect prefix list
+- MySQL 8.4.11 command-line client and server
+- Amazon CloudWatch / RDS Monitoring
+- Ubuntu Linux
+- SQL
+
+## Architecture
+
+```text
+                         AWS Region: ap-south-1 (Mumbai)
+
+                 Default VPC: vpc-055efadc90488fe4
+
+  Laptop / AWS Console
+          |
+          | Browser-based EC2 Instance Connect
+          v
+  +---------------------------------------+
+  | EC2 Ubuntu instance                   |
+  | Name: a10-rds-client-ec2              |
+  | Type: t3.micro                        |
+  | Security Group: A10-EC2-SSH-SG        |
+  | MySQL command-line client             |
+  +-------------------+-------------------+
+                      |
+                      | MySQL over TCP 3306
+                      | Private VPC networking
+                      | RDS SG allows EC2 SG as source
+                      v
+  +---------------------------------------+
+  | Amazon RDS for MySQL                  |
+  | Identifier: a10-mysql-db              |
+  | Engine: MySQL 8.4.11                  |
+  | Deployment: Single-AZ                 |
+  | Publicly accessible: No               |
+  | Security Group: A10-RDS-MySQL-SG      |
+  | Automated backup retention: 1 day     |
+  +-------------------+-------------------+
+                      |
+                      v
+              company_db database
+               /             \
+              v               v
+       departments         employees
+```
+
+## Network and Security Configuration
+
+### VPC
+
+| Property | Value |
+|---|---|
+| Region | Asia Pacific (Mumbai), `ap-south-1` |
+| VPC | Default VPC, `vpc-055efadc90488fe4` |
+| EC2 Availability Zone | `ap-south-1b` |
+| RDS Availability Zone | `ap-south-1b` |
+| RDS public accessibility | No |
+| MySQL port | TCP `3306` |
+
+### EC2 Security Group
+
+| Property | Value |
+|---|---|
+| Name | `A10-EC2-SSH-SG` |
+| Security Group ID | `sg-069608583e72852f7` |
+| Inbound | SSH, TCP port `22` |
+| Inbound source | AWS-managed prefix list `com.amazonaws.ap-south-1.ec2-instance-connect` (`pl-0fa83cebf909345ca`) |
+| Outbound | Default outbound rule retained |
+
+The SSH inbound rule allows the regional EC2 Instance Connect service to reach the instance. SSH was not opened to `0.0.0.0/0`.
+
+### RDS Security Group
+
+| Property | Value |
+|---|---|
+| Name | `A10-RDS-MySQL-SG` |
+| Security Group ID | `sg-0ad4a499ef47de50d` |
+| Inbound | MySQL/Aurora, TCP port `3306` |
+| Inbound source | EC2 Security Group `sg-069608583e72852f7` |
+| Outbound | Default outbound rule retained |
+
+The RDS Security Group references the EC2 Security Group as its source. This allows MySQL traffic from instances associated with the approved EC2 Security Group rather than exposing the database to the public internet.
+
+## EC2 Configuration
+
+| Property | Value |
+|---|---|
+| Instance name | `a10-rds-client-ec2` |
+| Instance ID | `i-003b761e72acc262e` |
+| Instance type | `t3.micro` |
+| Operating system | Ubuntu Linux |
+| Availability Zone | `ap-south-1b` |
+| Private IPv4 address | `172.31.8.184` |
+| Public IPv4 address at the time of the practical | `16.4.41.47` |
+| Access method | Browser-based EC2 Instance Connect |
+
+The MySQL command-line client was installed on the EC2 instance and its version was verified:
+
+```bash
+sudo apt update
+sudo apt install mysql-client -y
+mysql --version
+```
+
+The installed client reported version `8.4.11`.
+
+## RDS Configuration
+
+| Property | Value |
+|---|---|
+| DB instance identifier | `a10-mysql-db` |
+| Engine | MySQL Community Edition |
+| Engine version | `8.4.11` |
+| DB instance class | `db.t3.micro` |
+| Deployment | Single-AZ |
+| Availability Zone | `ap-south-1b` |
+| Allocated storage | `20 GiB` |
+| Storage type | General Purpose SSD (`gp3`) |
+| Encryption | Enabled |
+| Public accessibility | No |
+| Initial database | `a10db` |
+| Master username | `dbadmin` |
+| Port | `3306` |
+| Automated backups | Enabled |
+| Backup retention configured | **1 day** |
+| Enhanced Monitoring | Disabled |
+
+The RDS endpoint used during the practical was:
+
+```text
+a10-mysql-db.cpgmaqa8a2d6.ap-south-1.rds.amazonaws.com
+```
+
+The endpoint is included here as implementation evidence. The RDS instance should be deleted after the practical if it is no longer needed.
+
+### Configuration deviations
+
+The assignment specification requested **Multi-AZ for production** and **seven-day automated backup retention**. The completed lab used **Single-AZ** and **one-day backup retention**:
+
+- **Single-AZ:** Selected for this temporary practical to limit resource cost. Multi-AZ is the recommended deployment approach when production high availability and automatic failover are required.
+- **One-day backup retention:** The AWS account's current plan/console configuration prevented selection of seven days during this exercise. Automated backups were enabled and verified with one-day retention. Therefore, the seven-day requirement was not met.
+
+These deviations are recorded explicitly and are not represented as completed requirements.
+
+## Connecting EC2 to RDS
+
+The MySQL client was used from the EC2 terminal to connect to the private RDS endpoint:
+
+```bash
+mysql --ssl-mode=REQUIRED \
+  -h a10-mysql-db.cpgmaqa8a2d6.ap-south-1.rds.amazonaws.com \
+  -P 3306 \
+  -u dbadmin \
+  -p
+```
+
+The password was entered interactively and was not stored in this repository.
+
+The connection was verified with:
+
+```sql
+SELECT VERSION();
+SHOW DATABASES;
+USE a10db;
+SELECT DATABASE();
+```
+
+The server returned MySQL version `8.4.11`, listed the initial `a10db` database and system databases, and confirmed `a10db` as the selected database.
+
+> Do not commit database passwords, private keys, access keys, or other credentials to GitHub.
+
+## Database Design
+
+A separate database named `company_db` was created for the SQL exercises. It contains two related tables:
+
+- `departments`: stores department identifiers and unique department names.
+- `employees`: stores employee details and references `departments.department_id` through a foreign key.
+
+### Create database and tables
+
+```sql
+CREATE DATABASE IF NOT EXISTS company_db;
+USE company_db;
+
+CREATE TABLE departments (
+    department_id INT PRIMARY KEY,
+    department_name VARCHAR(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE employees (
+    employee_id INT PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    email VARCHAR(100) UNIQUE,
+    salary DECIMAL(10,2),
+    hire_date DATE,
+    department_id INT,
+    FOREIGN KEY (department_id)
+        REFERENCES departments(department_id)
+);
+```
+
+### Insert sample data
+
+```sql
+INSERT INTO departments (department_id, department_name)
+VALUES
+    (1, 'Engineering'),
+    (2, 'Human Resources'),
+    (3, 'Finance');
+
+INSERT INTO employees
+    (employee_id, first_name, last_name, email,
+     salary, hire_date, department_id)
+VALUES
+    (101, 'Aarav', 'Shah', 'aarav@example.com',
+     65000.00, '2024-01-15', 1),
+    (102, 'Diya', 'Patel', 'diya@example.com',
+     58000.00, '2023-11-20', 1),
+    (103, 'Kabir', 'Mehta', 'kabir@example.com',
+     52000.00, '2024-03-10', 2),
+    (104, 'Anaya', 'Desai', 'anaya@example.com',
+     61000.00, '2022-08-01', 3),
+    (105, 'Ishaan', 'Kulkarni', 'ishaan@example.com',
+     47000.00, '2025-02-12', 2);
+```
+
+### SQL queries performed
+
+**1. Retrieve all employees**
+
+```sql
+SELECT * FROM employees;
+```
+
+**2. Filter employees with salary greater than 55,000**
+
+```sql
+SELECT first_name, last_name, salary
+FROM employees
+WHERE salary > 55000;
+```
+
+This returned three employees before the later update and delete operations: Aarav, Diya, and Anaya.
+
+**3. Sort employees by salary in descending order**
+
+```sql
+SELECT first_name, last_name, salary
+FROM employees
+ORDER BY salary DESC;
+```
+
+**4. Join employees with departments**
+
+```sql
+SELECT
+    e.employee_id,
+    e.first_name,
+    e.last_name,
+    d.department_name,
+    e.salary
+FROM employees e
+JOIN departments d
+    ON e.department_id = d.department_id;
+```
+
+The inner join returned the five inserted employees with their department names.
+
+**5. Update an employee salary**
+
+```sql
+UPDATE employees
+SET salary = 68000
+WHERE employee_id = 101;
+
+SELECT *
+FROM employees
+WHERE employee_id = 101;
+```
+
+The salary for employee `101` (Aarav Shah) changed from `65000.00` to `68000.00`.
+
+**6. Delete an employee record**
+
+```sql
+DELETE FROM employees
+WHERE employee_id = 105;
+
+SELECT * FROM employees;
+```
+
+One record, employee `105` (Ishaan Kulkarni), was deleted. Four employee records remained.
+
+**7. Count employees in each department**
+
+```sql
+SELECT
+    d.department_name,
+    COUNT(e.employee_id) AS total_employees
+FROM departments d
+LEFT JOIN employees e
+    ON d.department_id = e.department_id
+GROUP BY d.department_id, d.department_name;
+```
+
+Final result:
+
+| Department | Employee count |
+|---|---:|
+| Engineering | 2 |
+| Finance | 1 |
+| Human Resources | 1 |
+| **Total** | **4** |
+
+## Automated Backups
+
+Automated backups were enabled for `a10-mysql-db`. The RDS Automated backups page showed an active backup record, and the backup details showed an available restorable time range.
+
+| Property | Observed configuration |
+|---|---|
+| Source database | `a10-mysql-db` |
+| Engine version | `8.4.11` |
+| Backup status | Active |
+| Backup retention period | 1 day |
+| Encryption | Enabled |
+| Availability Zone | `ap-south-1b` |
+
+The configured retention period was one day, not the seven days specified in the assignment. The backup and restore information was inspected in the RDS console. A restore operation was not performed as part of this practical.
+
+## RDS Monitoring
+
+The RDS Monitoring tab was inspected after the SQL workload was executed. The captured console metrics included:
+
+- `CPUUtilization`
+- `DatabaseConnections`
+- `DiskQueueDepth`
+- `EBSByteBalance%`
+- `EBSIOBalance%`
+- `FreeableMemory`
+- `FreeStorageSpace`
+- `DataVolumeIOPSExceededCheck`
+- `DataVolumeThroughputExceededCheck`
+
+The monitoring screenshot showed database connection activity and available storage/memory metrics. These are CloudWatch/RDS monitoring metrics; the graph values reflect the activity and time range visible in the screenshot and should not be treated as permanent performance benchmarks.
+
+## Screenshots and Evidence
+
+The repository contains 18 screenshots documenting the implementation:
+
+| Screenshot | Evidence |
+|---|---|
+| `A10-01-EC2-SSH-Security-Group.png` | EC2 SSH Security Group and EC2 Instance Connect source |
+| `A10-02-RDS-MySQL-Security-Group.png` | RDS MySQL Security Group |
+| `A10-03-EC2-Instance-Ready.png` | EC2 instance running and ready |
+| `A10-04-EC2-Instance-Connect.png` | Successful browser-based EC2 connection |
+| `A10-05-RDS-Database-Configuration.png` | RDS database configuration |
+| `A10-06-RDS-Automated-Backup-1-Day.png` | Automated backup setting at creation |
+| `A10-07-RDS-Connectivity-Details.png` | RDS endpoint, port, VPC, and security group |
+| `A10-08-MySQL-Client-Installed.png` | MySQL client installation and version |
+| `A10-09-EC2-to-RDS-Connection.png` | Successful EC2-to-RDS connection and verification |
+| `A10-10-Database-Creation.png` | `company_db` creation and selection |
+| `A10-11-Table-Creation.png` | Table creation and table descriptions |
+| `A10-12-Sample-Data-Insertion.png` | Department and employee sample records |
+| `A10-13-Select-Filter-Sort.png` | SELECT, WHERE, and ORDER BY results |
+| `A10-14-SQL-Join-Query.png` | Employee and department JOIN result |
+| `A10-15-SQL-Update-Delete.png` | UPDATE and DELETE results |
+| `A10-16-Department-Statistics.png` | Department-wise employee counts |
+| `A10-17-RDS-Automated-Backups.png` | Automated backup details and restorable time range |
+| `A10-18-RDS-Monitoring-Metrics.png` | RDS monitoring metrics |
+
+## Suggested Repository Structure
+
+```text
+Assignment-10-RDS-Database-Setup-and-Management/
+│
+├── README.md
+├── Assignment_10_RDS_Database_Setup_and_Management_Report.docx
+├── Assignment_10_Screenshots.zip
+│
+└── screenshots/
+    ├── A10-01-EC2-SSH-Security-Group.png
+    ├── A10-02-RDS-MySQL-Security-Group.png
+    ├── A10-03-EC2-Instance-Ready.png
+    ├── A10-04-EC2-Instance-Connect.png
+    ├── A10-05-RDS-Database-Configuration.png
+    ├── A10-06-RDS-Automated-Backup-1-Day.png
+    ├── A10-07-RDS-Connectivity-Details.png
+    ├── A10-08-MySQL-Client-Installed.png
+    ├── A10-09-EC2-to-RDS-Connection.png
+    ├── A10-10-Database-Creation.png
+    ├── A10-11-Table-Creation.png
+    ├── A10-12-Sample-Data-Insertion.png
+    ├── A10-13-Select-Filter-Sort.png
+    ├── A10-14-SQL-Join-Query.png
+    ├── A10-15-SQL-Update-Delete.png
+    ├── A10-16-Department-Statistics.png
+    ├── A10-17-RDS-Automated-Backups.png
+    └── A10-18-RDS-Monitoring-Metrics.png
+```
+
+Adjust the folder paths above to match the actual repository layout when adding the files.
+
+## Cleanup
+
+After collecting the report and screenshot evidence, the following resources should be removed if they are no longer needed:
+
+1. Delete the RDS DB instance without creating a final snapshot or retaining automated backups, if no recovery copy is required.
+2. Check the RDS Automated backups page and delete any retained automated backups associated with this practical.
+3. Delete any assignment-related manual RDS snapshots.
+4. Terminate the EC2 instance.
+5. Verify whether its EBS root volume was deleted automatically; delete only leftover Assignment 10 volumes that are no longer required.
+6. Delete Assignment 10 EBS snapshots, if any.
+7. Release any unused Elastic IP allocated specifically for this practical, if one exists.
+8. Delete `A10-RDS-MySQL-SG` and then `A10-EC2-SSH-SG` after their dependencies have been removed.
+
+Do not delete the Default VPC, default subnets, Default Security Group, Internet Gateway, or AWS-managed EC2 Instance Connect prefix list. These are not Assignment 10 resources and may be used by other coursework.
+
+**Cleanup verification:** Confirm the current AWS Mumbai region no longer contains the Assignment 10 RDS instance, EC2 instance, retained backups, snapshots, leftover EBS volumes, or custom Security Groups before marking cleanup as complete. This README describes the cleanup procedure; the cleanup completion status should only be marked after checking the AWS console.
+
+## Key Learnings
+
+- Amazon RDS provides a managed relational database service without requiring manual database-server administration.
+- EC2 and RDS can communicate privately within the same VPC.
+- Security Group references help restrict database access to approved application instances.
+- MySQL databases use tables, primary keys, foreign keys, and SQL queries to manage related data.
+- `SELECT`, `WHERE`, `ORDER BY`, `JOIN`, `UPDATE`, `DELETE`, `COUNT`, and `GROUP BY` are useful database operations.
+- RDS automated backups support recovery and point-in-time restore within the configured retention window.
+- RDS/CloudWatch metrics help monitor CPU, connections, storage, memory, and I/O activity.
+- Temporary cloud resources should be cleaned up after testing to reduce avoidable charges.
+
+## Conclusion
+
+This assignment demonstrated the setup and management of a private Amazon RDS for MySQL database accessed from an EC2 instance. Separate Security Groups were configured for SSH access and MySQL access, the MySQL client was installed on EC2, and connectivity to RDS was verified. A relational `company_db` database was created with `departments` and `employees` tables, and sample SQL operations were executed successfully. Automated backups were enabled and inspected, and RDS monitoring metrics were reviewed.
+
+The practical used Single-AZ deployment and one-day backup retention. These differ from the production Multi-AZ recommendation and seven-day retention requirement, respectively, and are documented as limitations.
+
+## References
+
+- [Amazon RDS Getting Started](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_GettingStarted.html)
+- [Working with Amazon RDS Automated Backups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html)
+- [Creating an Amazon RDS DB Instance](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CreateDBInstance.html)
+- [Connecting to a MySQL DB Instance from a MySQL Client](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ConnectToInstance.html)
+- [Monitoring Amazon RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/MonitoringOverview.html)
+- [EC2 Instance Connect](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-linux-inst-eic.html)
